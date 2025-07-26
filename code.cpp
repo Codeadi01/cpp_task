@@ -197,6 +197,23 @@ private:
         return estimated_signal < SIGNAL_THRESHOLD_DBM;
     }
     
+    // Issue 2: Helper function to reduce nesting in calculateOptimalRouterPlacement
+    double calculateGapReductionScore(int x, int y, const std::vector<std::pair<int, int>>& gaps) const {
+        auto gap_reduction_score = 0.0;
+        
+        for (const auto& [gap_x, gap_y] : gaps) {
+            auto distance = std::sqrt(std::pow(x - gap_x, 2) + std::pow(y - gap_y, 2));
+            // Assume router provides -40 dBm at 1 meter
+            auto signal_at_gap = -40.0 - 20.0 * SIGNAL_PROPAGATION_FACTOR * std::log10(std::max(1.0, distance));
+            
+            if (signal_at_gap > SIGNAL_THRESHOLD_DBM) {
+                gap_reduction_score += 1.0;
+            }
+        }
+        
+        return gap_reduction_score;
+    }
+    
 public:
     explicit WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
         : db_path(database_path) {
@@ -430,8 +447,8 @@ public:
     }
     
     double estimateSignalAtPoint(int x, int y) const {
-        double weighted_sum = 0.0;
-        double weight_total = 0.0;
+        auto weighted_sum = 0.0;
+        auto weight_total = 0.0;
         
         // Issue 6: Replace declaration with structured binding
         for (const auto& [coord, point] : signal_grid) {
@@ -464,27 +481,17 @@ public:
         return gaps;
     }
     
-    // Calculate optimal router placement
-    std::vector<RouterRecommendation> calculateOptimalRouterPlacement(int min_x, int max_x, int min_y, int max_y) {
+    // Issue 1: Calculate optimal router placement - should be const
+    std::vector<RouterRecommendation> calculateOptimalRouterPlacement(int min_x, int max_x, int min_y, int max_y) const {
         std::vector<RouterRecommendation> recommendations;
         auto gaps = findCoverageGaps(min_x, max_x, min_y, max_y);
         
+        // Issue 2: Reduced nesting by extracting helper function
         // Evaluate each potential position
         for (int x = min_x; x <= max_x; x += GRID_INTERVAL_METERS) {
             for (int y = min_y; y <= max_y; y += GRID_INTERVAL_METERS) {
                 auto coverage_score = 0.0;
-                auto gap_reduction_score = 0.0;
-                
-                // Calculate how many gaps this position would cover
-                for (const auto& [gap_x, gap_y] : gaps) {
-                    auto distance = std::sqrt(std::pow(x - gap_x, 2) + std::pow(y - gap_y, 2));
-                    // Assume router provides -40 dBm at 1 meter
-                    auto signal_at_gap = -40.0 - 20.0 * SIGNAL_PROPAGATION_FACTOR * std::log10(std::max(1.0, distance));
-                    
-                    if (signal_at_gap > SIGNAL_THRESHOLD_DBM) {
-                        gap_reduction_score += 1.0;
-                    }
-                }
+                auto gap_reduction_score = calculateGapReductionScore(x, y, gaps);
                 
                 // Calculate overlap with existing coverage
                 auto existing_signal = estimateSignalAtPoint(x, y);
@@ -539,6 +546,7 @@ public:
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const char* date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            // Issue 3 & 4: Replace redundant type with auto
             auto avg_signal = sqlite3_column_double(stmt, 1);
             auto min_signal = sqlite3_column_int(stmt, 2);
             auto max_signal = sqlite3_column_int(stmt, 3);
