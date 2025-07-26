@@ -25,7 +25,7 @@ constexpr int SIGNAL_THRESHOLD_DBM = -70;
 constexpr int ROLLING_PERIOD_DAYS = 30;
 constexpr double SIGNAL_PROPAGATION_FACTOR = 2.0;
 
-// Structure to hold WiFi scan results
+// Issue 1: Structure with proper copy/move semantics
 struct WiFiNetwork {
     std::string ssid;
     std::string bssid;
@@ -33,22 +33,46 @@ struct WiFiNetwork {
     int channel;
     double frequency;
     std::chrono::system_clock::time_point timestamp;
+    
+    // Default copy/move operations are fine for this struct
+    WiFiNetwork() = default;
+    WiFiNetwork(const WiFiNetwork&) = default;
+    WiFiNetwork& operator=(const WiFiNetwork&) = default;
+    WiFiNetwork(WiFiNetwork&&) = default;
+    WiFiNetwork& operator=(WiFiNetwork&&) = default;
+    ~WiFiNetwork() = default;
 };
 
-// Structure for grid-based signal data
+// Issue 1: Structure with proper copy/move semantics
 struct GridPoint {
     int x;
     int y;
     double avg_signal;
     int measurement_count;
+    
+    // Default copy/move operations are fine for this struct
+    GridPoint() = default;
+    GridPoint(const GridPoint&) = default;
+    GridPoint& operator=(const GridPoint&) = default;
+    GridPoint(GridPoint&&) = default;
+    GridPoint& operator=(GridPoint&&) = default;
+    ~GridPoint() = default;
 };
 
-// Structure for router placement recommendation
+// Issue 1: Structure with proper copy/move semantics
 struct RouterRecommendation {
     int x;
     int y;
     double coverage_score;
     double gap_reduction_score;
+    
+    // Default copy/move operations are fine for this struct
+    RouterRecommendation() = default;
+    RouterRecommendation(const RouterRecommendation&) = default;
+    RouterRecommendation& operator=(const RouterRecommendation&) = default;
+    RouterRecommendation(RouterRecommendation&&) = default;
+    RouterRecommendation& operator=(RouterRecommendation&&) = default;
+    ~RouterRecommendation() = default;
 };
 
 // Signal management class to handle graceful shutdown
@@ -65,7 +89,7 @@ public:
         signal(SIGTERM, SignalManager::signalHandler);
     }
 
-    // Issue 1: Customize copy constructor and assignment for resource management
+    // Copy/move operations for singleton
     SignalManager(const SignalManager&) = delete;
     SignalManager& operator=(const SignalManager&) = delete;
     
@@ -113,14 +137,36 @@ private:
     std::map<std::pair<int, int>, GridPoint> signal_grid;
     std::unique_ptr<SignalManager> signal_manager;
     
-    // Helper function to extract BSSID from line - Issue 7: Reduce nesting
+    // Helper function to process network line - Issue 7: Reduce nesting
+    void processNetworkLine(const std::string& line, WiFiNetwork& current_network, bool& in_cell, std::vector<WiFiNetwork>& networks) const {
+        if (line.contains("Cell")) {
+            if (in_cell && !current_network.bssid.empty()) {
+                current_network.timestamp = std::chrono::system_clock::now();
+                networks.push_back(current_network);
+            }
+            in_cell = true;
+            current_network = WiFiNetwork();
+            extractBSSID(line, current_network);
+            return;
+        }
+        
+        if (line.contains("ESSID:")) {
+            extractSSID(line, current_network);
+        } else if (line.contains("Signal level=")) {
+            extractSignalStrength(line, current_network);
+        } else if (line.contains("Channel:")) {
+            extractChannel(line, current_network);
+        } else if (line.contains("Frequency:")) {
+            extractFrequency(line, current_network);
+        }
+    }
+    
     void extractBSSID(const std::string& line, WiFiNetwork& network) const {
         if (auto pos = line.find("Address: "); pos != std::string::npos) {
             network.bssid = line.substr(pos + 9, 17);
         }
     }
     
-    // Helper function to extract SSID from line - Issue 7: Reduce nesting
     void extractSSID(const std::string& line, WiFiNetwork& network) const {
         auto start = line.find("\"") + 1;
         auto end = line.rfind("\"");
@@ -129,24 +175,26 @@ private:
         }
     }
     
-    // Helper function to extract signal strength - Issue 7: Reduce nesting
     void extractSignalStrength(const std::string& line, WiFiNetwork& network) const {
         auto pos = line.find("Signal level=");
         std::string signal_str = line.substr(pos + 13);
         network.signal_dbm = std::stoi(signal_str);
     }
     
-    // Helper function to extract channel - Issue 7: Reduce nesting
     void extractChannel(const std::string& line, WiFiNetwork& network) const {
         auto pos = line.find("Channel:");
         network.channel = std::stoi(line.substr(pos + 8));
     }
     
-    // Helper function to extract frequency - Issue 7: Reduce nesting
     void extractFrequency(const std::string& line, WiFiNetwork& network) const {
         auto pos = line.find("Frequency:");
         std::string freq_str = line.substr(pos + 10);
         network.frequency = std::stod(freq_str);
+    }
+    
+    bool isGapLocation(int x, int y) const {
+        double estimated_signal = estimateSignalAtPoint(x, y);
+        return estimated_signal < SIGNAL_THRESHOLD_DBM;
     }
     
 public:
@@ -258,7 +306,7 @@ public:
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_grid ON wifi_scans(grid_x, grid_y);", nullptr, nullptr, nullptr);
     }
     
-    // Execute iwlist scan command and parse results - Issue 7: Reduced nesting by extracting helper functions
+    // Issue 7: Reduced nesting by extracting helper function
     std::vector<WiFiNetwork> scanWiFiNetworks() const {
         std::vector<WiFiNetwork> networks;
         
@@ -276,24 +324,7 @@ public:
         
         while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
             std::string line(buffer.data());
-            
-            if (line.contains("Cell")) {
-                if (in_cell && !current_network.bssid.empty()) {
-                    current_network.timestamp = std::chrono::system_clock::now();
-                    networks.push_back(current_network);
-                }
-                in_cell = true;
-                current_network = WiFiNetwork();
-                extractBSSID(line, current_network);
-            } else if (line.contains("ESSID:")) {
-                extractSSID(line, current_network);
-            } else if (line.contains("Signal level=")) {
-                extractSignalStrength(line, current_network);
-            } else if (line.contains("Channel:")) {
-                extractChannel(line, current_network);
-            } else if (line.contains("Frequency:")) {
-                extractFrequency(line, current_network);
-            }
+            processNetworkLine(line, current_network, in_cell, networks);
         }
         
         // Add last network
@@ -404,13 +435,13 @@ public:
         
         // Issue 6: Replace declaration with structured binding
         for (const auto& [coord, point] : signal_grid) {
-            double distance = std::sqrt(std::pow(x - coord.first, 2) + std::pow(y - coord.second, 2));
+            auto distance = std::sqrt(std::pow(x - coord.first, 2) + std::pow(y - coord.second, 2));
             if (distance < 0.1) {
                 return point.avg_signal;
             }
             
             // Path loss model: signal decreases with distance
-            double weight = 1.0 / std::pow(distance, SIGNAL_PROPAGATION_FACTOR);
+            auto weight = 1.0 / std::pow(distance, SIGNAL_PROPAGATION_FACTOR);
             weighted_sum += point.avg_signal * weight;
             weight_total += weight;
         }
@@ -433,14 +464,6 @@ public:
         return gaps;
     }
     
-private:
-    // Helper function to reduce nesting
-    bool isGapLocation(int x, int y) const {
-        double estimated_signal = estimateSignalAtPoint(x, y);
-        return estimated_signal < SIGNAL_THRESHOLD_DBM;
-    }
-    
-public:
     // Calculate optimal router placement
     std::vector<RouterRecommendation> calculateOptimalRouterPlacement(int min_x, int max_x, int min_y, int max_y) {
         std::vector<RouterRecommendation> recommendations;
@@ -449,14 +472,14 @@ public:
         // Evaluate each potential position
         for (int x = min_x; x <= max_x; x += GRID_INTERVAL_METERS) {
             for (int y = min_y; y <= max_y; y += GRID_INTERVAL_METERS) {
-                double coverage_score = 0.0;
-                double gap_reduction_score = 0.0;
+                auto coverage_score = 0.0;
+                auto gap_reduction_score = 0.0;
                 
                 // Calculate how many gaps this position would cover
-                for (const auto& gap : gaps) {
-                    double distance = std::sqrt(std::pow(x - gap.first, 2) + std::pow(y - gap.second, 2));
+                for (const auto& [gap_x, gap_y] : gaps) {
+                    auto distance = std::sqrt(std::pow(x - gap_x, 2) + std::pow(y - gap_y, 2));
                     // Assume router provides -40 dBm at 1 meter
-                    double signal_at_gap = -40.0 - 20.0 * SIGNAL_PROPAGATION_FACTOR * std::log10(std::max(1.0, distance));
+                    auto signal_at_gap = -40.0 - 20.0 * SIGNAL_PROPAGATION_FACTOR * std::log10(std::max(1.0, distance));
                     
                     if (signal_at_gap > SIGNAL_THRESHOLD_DBM) {
                         gap_reduction_score += 1.0;
@@ -464,11 +487,10 @@ public:
                 }
                 
                 // Calculate overlap with existing coverage
-                double existing_signal = estimateSignalAtPoint(x, y);
+                auto existing_signal = estimateSignalAtPoint(x, y);
                 coverage_score = 100.0 - std::abs(existing_signal);
                 
-                RouterRecommendation rec = {x, y, coverage_score, gap_reduction_score};
-                recommendations.push_back(rec);
+                recommendations.emplace_back(RouterRecommendation{x, y, coverage_score, gap_reduction_score});
             }
         }
         
@@ -597,7 +619,7 @@ public:
         std::cout << "--------------|----------------|---------------|---------------" << std::endl;
         
         for (const auto& rec : recommendations) {
-            double combined_score = rec.coverage_score + rec.gap_reduction_score;
+            auto combined_score = rec.coverage_score + rec.gap_reduction_score;
             std::cout << "(" << std::setw(4) << rec.x << ", " << std::setw(4) << rec.y << ") | "
                       << std::setw(14) << std::fixed << std::setprecision(1) << rec.coverage_score << " | "
                       << std::setw(13) << std::fixed << std::setprecision(1) << rec.gap_reduction_score << " | "
@@ -688,7 +710,7 @@ public:
             // Calculate time to next scan
             auto end_time = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
-            int sleep_time = std::max(1, SCAN_INTERVAL_SECONDS - static_cast<int>(elapsed));
+            auto sleep_time = std::max(1, SCAN_INTERVAL_SECONDS - static_cast<int>(elapsed));
             
             // Sleep until next scan
             for (int i = 0; i < sleep_time && signal_manager->shouldContinue(); ++i) {
