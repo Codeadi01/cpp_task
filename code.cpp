@@ -12,25 +12,17 @@
 #include <numeric>
 #include <iomanip>
 #include <memory>
+#include <atomic>
 #include <sqlite3.h>
 #include <cstdlib>
 #include <signal.h>
 
 // Configuration constants
-const int SCAN_INTERVAL_SECONDS = 60;
-const int GRID_INTERVAL_METERS = 5;
-const int SIGNAL_THRESHOLD_DBM = -70;
-const int ROLLING_PERIOD_DAYS = 30;
-const double SIGNAL_PROPAGATION_FACTOR = 2.0; // Free space path loss exponent
-
-// Global flag for graceful shutdown
-volatile bool running = true;
-
-// Signal handler for graceful shutdown
-void signalHandler(int signum) {
-    std::cout << "\nShutdown signal received. Cleaning up..." << std::endl;
-    running = false;
-}
+constexpr int SCAN_INTERVAL_SECONDS = 60;
+constexpr int GRID_INTERVAL_METERS = 5;
+constexpr int SIGNAL_THRESHOLD_DBM = -70;
+constexpr int ROLLING_PERIOD_DAYS = 30;
+constexpr double SIGNAL_PROPAGATION_FACTOR = 2.0;
 
 // Structure to hold WiFi scan results
 struct WiFiNetwork {
@@ -58,15 +50,53 @@ struct RouterRecommendation {
     double gap_reduction_score;
 };
 
+// Signal management class to handle graceful shutdown
+class SignalManager {
+private:
+    static std::atomic<bool> should_continue;
+    static SignalManager* instance;
+
+public:
+    SignalManager() {
+        instance = this;
+        should_continue.store(true);
+        signal(SIGINT, SignalManager::signalHandler);
+        signal(SIGTERM, SignalManager::signalHandler);
+    }
+
+    ~SignalManager() {
+        instance = nullptr;
+    }
+
+    static void signalHandler(int signum) {
+        std::cout << "\nShutdown signal received. Cleaning up..." << std::endl;
+        should_continue.store(false);
+    }
+
+    bool shouldContinue() const {
+        return should_continue.load();
+    }
+
+    void requestShutdown() {
+        should_continue.store(false);
+    }
+};
+
+// Static member definitions
+std::atomic<bool> SignalManager::should_continue{true};
+SignalManager* SignalManager::instance = nullptr;
+
 class WiFiSignalMapper {
 private:
     sqlite3* db;
     std::string db_path;
     std::map<std::pair<int, int>, GridPoint> signal_grid;
+    std::unique_ptr<SignalManager> signal_manager;
     
 public:
     WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
         : db_path(database_path), db(nullptr) {
+        signal_manager = std::make_unique<SignalManager>();
         initializeDatabase();
     }
     
@@ -557,7 +587,7 @@ public:
         
         int scan_count = 0;
         
-        while (running) {
+        while (signal_manager->shouldContinue()) {
             auto start_time = std::chrono::steady_clock::now();
             
             // Perform WiFi scan
@@ -585,7 +615,7 @@ public:
             int sleep_time = std::max(1, SCAN_INTERVAL_SECONDS - static_cast<int>(elapsed));
             
             // Sleep until next scan
-            for (int i = 0; i < sleep_time && running; ++i) {
+            for (int i = 0; i < sleep_time && signal_manager->shouldContinue(); ++i) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
         }
@@ -611,10 +641,6 @@ public:
 };
 
 int main() {
-    // Set up signal handler for graceful shutdown
-    signal(SIGINT, signalHandler);
-    signal(SIGTERM, signalHandler);
-    
     try {
         // Create WiFi signal mapper instance
         WiFiSignalMapper mapper("wifi_signal_map.db");
