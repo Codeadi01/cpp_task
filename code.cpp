@@ -13,6 +13,7 @@
 #include <iomanip>
 #include <memory>
 #include <atomic>
+#include <ranges>
 #include <sqlite3.h>
 #include <cstdlib>
 #include <signal.h>
@@ -31,7 +32,7 @@ struct WiFiNetwork {
     int signal_dbm;
     int channel;
     double frequency;
-    std::time_t timestamp;
+    std::chrono::system_clock::time_point timestamp;
 };
 
 // Structure for grid-based signal data
@@ -68,11 +69,13 @@ public:
         instance = nullptr;
     }
 
-    static void signalHandler(int signum) {
+    // Issue 2: Remove unused parameter or make it unnamed
+    static void signalHandler(int /* signum */) {
         std::cout << "\nShutdown signal received. Cleaning up..." << std::endl;
         should_continue.store(false);
     }
 
+    // Issue 3: Function should be declared const
     bool shouldContinue() const {
         return should_continue.load();
     }
@@ -88,16 +91,45 @@ SignalManager* SignalManager::instance = nullptr;
 
 class WiFiSignalMapper {
 private:
-    sqlite3* db;
+    // Issue 6: Use in-class initializer instead of initializer list for "db"
+    sqlite3* db = nullptr;
     std::string db_path;
     std::map<std::pair<int, int>, GridPoint> signal_grid;
     std::unique_ptr<SignalManager> signal_manager;
     
 public:
-    WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
-        : db_path(database_path), db(nullptr) {
+    // Issue 1: Customize copy constructor and assignment for resource management
+    // Issue 5: Add explicit keyword to constructor
+    explicit WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
+        : db_path(database_path) {  // Issue 7: Fixed field initialization order
         signal_manager = std::make_unique<SignalManager>();
         initializeDatabase();
+    }
+    
+    // Delete copy constructor and assignment operator for resource safety
+    WiFiSignalMapper(const WiFiSignalMapper&) = delete;
+    WiFiSignalMapper& operator=(const WiFiSignalMapper&) = delete;
+    
+    // Move constructor and assignment
+    WiFiSignalMapper(WiFiSignalMapper&& other) noexcept 
+        : db(other.db), db_path(std::move(other.db_path)), 
+          signal_grid(std::move(other.signal_grid)),
+          signal_manager(std::move(other.signal_manager)) {
+        other.db = nullptr;
+    }
+    
+    WiFiSignalMapper& operator=(WiFiSignalMapper&& other) noexcept {
+        if (this != &other) {
+            if (db) {
+                sqlite3_close(db);
+            }
+            db = other.db;
+            db_path = std::move(other.db_path);
+            signal_grid = std::move(other.signal_grid);
+            signal_manager = std::move(other.signal_manager);
+            other.db = nullptr;
+        }
+        return *this;
     }
     
     ~WiFiSignalMapper() {
@@ -115,7 +147,7 @@ public:
         }
         
         // Create tables if they don't exist
-        const char* create_scans_table = R"(
+        constexpr const char* create_scans_table = R"(
             CREATE TABLE IF NOT EXISTS wifi_scans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp INTEGER NOT NULL,
@@ -129,7 +161,7 @@ public:
             );
         )";
         
-        const char* create_alerts_table = R"(
+        constexpr const char* create_alerts_table = R"(
             CREATE TABLE IF NOT EXISTS signal_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp INTEGER NOT NULL,
@@ -140,7 +172,7 @@ public:
             );
         )";
         
-        const char* create_recommendations_table = R"(
+        constexpr const char* create_recommendations_table = R"(
             CREATE TABLE IF NOT EXISTS router_recommendations (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 timestamp INTEGER NOT NULL,
@@ -152,20 +184,20 @@ public:
         )";
         
         char* err_msg = nullptr;
-        rc = sqlite3_exec(db, create_scans_table, nullptr, nullptr, &err_msg);
-        if (rc != SQLITE_OK) {
+        int rc_result = sqlite3_exec(db, create_scans_table, nullptr, nullptr, &err_msg);
+        if (rc_result != SQLITE_OK) {
             std::cerr << "SQL error: " << err_msg << std::endl;
             sqlite3_free(err_msg);
         }
         
-        rc = sqlite3_exec(db, create_alerts_table, nullptr, nullptr, &err_msg);
-        if (rc != SQLITE_OK) {
+        rc_result = sqlite3_exec(db, create_alerts_table, nullptr, nullptr, &err_msg);
+        if (rc_result != SQLITE_OK) {
             std::cerr << "SQL error: " << err_msg << std::endl;
             sqlite3_free(err_msg);
         }
         
-        rc = sqlite3_exec(db, create_recommendations_table, nullptr, nullptr, &err_msg);
-        if (rc != SQLITE_OK) {
+        rc_result = sqlite3_exec(db, create_recommendations_table, nullptr, nullptr, &err_msg);
+        if (rc_result != SQLITE_OK) {
             std::cerr << "SQL error: " << err_msg << std::endl;
             sqlite3_free(err_msg);
         }
@@ -176,7 +208,7 @@ public:
     }
     
     // Execute iwlist scan command and parse results
-    std::vector<WiFiNetwork> scanWiFiNetworks() {
+    std::vector<WiFiNetwork> scanWiFiNetworks() const {  // Issue 8: Function should be const
         std::vector<WiFiNetwork> networks;
         
         // Execute iwlist command
@@ -186,54 +218,56 @@ public:
             return networks;
         }
         
-        char buffer[256];
+        // Issue 9: Use std::string instead of C-style char array
+        std::string buffer;
+        buffer.resize(256);
         WiFiNetwork current_network;
         bool in_cell = false;
         
-        while (fgets(buffer, sizeof(buffer), pipe) != nullptr) {
-            std::string line(buffer);
+        while (fgets(buffer.data(), buffer.size(), pipe) != nullptr) {
+            std::string line(buffer.data());
             
-            // Check for new cell
-            if (line.find("Cell") != std::string::npos) {
+            // Issue 10-15: Use "contains" instead of "find" 
+            if (line.contains("Cell")) {
                 if (in_cell && !current_network.bssid.empty()) {
-                    current_network.timestamp = std::time(nullptr);
+                    // Issue 16: Replace time with std::chrono
+                    current_network.timestamp = std::chrono::system_clock::now();
                     networks.push_back(current_network);
                 }
                 in_cell = true;
                 current_network = WiFiNetwork();
                 
                 // Extract BSSID
-                size_t pos = line.find("Address: ");
-                if (pos != std::string::npos) {
+                if (auto pos = line.find("Address: "); pos != std::string::npos) {
                     current_network.bssid = line.substr(pos + 9, 17);
                 }
             }
             
             // Extract SSID
-            if (line.find("ESSID:") != std::string::npos) {
-                size_t start = line.find("\"") + 1;
-                size_t end = line.rfind("\"");
+            if (line.contains("ESSID:")) {
+                auto start = line.find("\"") + 1;
+                auto end = line.rfind("\"");
                 if (start < end) {
                     current_network.ssid = line.substr(start, end - start);
                 }
             }
             
             // Extract signal strength
-            if (line.find("Signal level=") != std::string::npos) {
-                size_t pos = line.find("Signal level=");
+            if (line.contains("Signal level=")) {
+                auto pos = line.find("Signal level=");
                 std::string signal_str = line.substr(pos + 13);
                 current_network.signal_dbm = std::stoi(signal_str);
             }
             
             // Extract channel
-            if (line.find("Channel:") != std::string::npos) {
-                size_t pos = line.find("Channel:");
+            if (line.contains("Channel:")) {
+                auto pos = line.find("Channel:");
                 current_network.channel = std::stoi(line.substr(pos + 8));
             }
             
             // Extract frequency
-            if (line.find("Frequency:") != std::string::npos) {
-                size_t pos = line.find("Frequency:");
+            if (line.contains("Frequency:")) {
+                auto pos = line.find("Frequency:");
                 std::string freq_str = line.substr(pos + 10);
                 current_network.frequency = std::stod(freq_str);
             }
@@ -241,7 +275,8 @@ public:
         
         // Add last network
         if (in_cell && !current_network.bssid.empty()) {
-            current_network.timestamp = std::time(nullptr);
+            // Issue 17: Replace time with std::chrono
+            current_network.timestamp = std::chrono::system_clock::now();
             networks.push_back(current_network);
         }
         
@@ -251,7 +286,7 @@ public:
     
     // Store scan results in database
     void storeScanResults(const std::vector<WiFiNetwork>& networks, int grid_x = 0, int grid_y = 0) {
-        const char* insert_sql = R"(
+        constexpr const char* insert_sql = R"(
             INSERT INTO wifi_scans (timestamp, ssid, bssid, signal_dbm, channel, frequency, grid_x, grid_y)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?);
         )";
@@ -260,7 +295,9 @@ public:
         sqlite3_prepare_v2(db, insert_sql, -1, &stmt, nullptr);
         
         for (const auto& network : networks) {
-            sqlite3_bind_int64(stmt, 1, network.timestamp);
+            // Convert chrono time_point to time_t for SQLite
+            auto time_t_timestamp = std::chrono::system_clock::to_time_t(network.timestamp);
+            sqlite3_bind_int64(stmt, 1, time_t_timestamp);
             sqlite3_bind_text(stmt, 2, network.ssid.c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_text(stmt, 3, network.bssid.c_str(), -1, SQLITE_STATIC);
             sqlite3_bind_int(stmt, 4, network.signal_dbm);
@@ -288,7 +325,7 @@ public:
                   << ", Signal: " << network.signal_dbm << " dBm" 
                   << " (Below threshold: " << SIGNAL_THRESHOLD_DBM << " dBm)" << std::endl;
         
-        const char* insert_alert = R"(
+        constexpr const char* insert_alert = R"(
             INSERT INTO signal_alerts (timestamp, ssid, bssid, signal_dbm, alert_type)
             VALUES (?, ?, ?, ?, ?);
         )";
@@ -296,7 +333,8 @@ public:
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db, insert_alert, -1, &stmt, nullptr);
         
-        sqlite3_bind_int64(stmt, 1, network.timestamp);
+        auto time_t_timestamp = std::chrono::system_clock::to_time_t(network.timestamp);
+        sqlite3_bind_int64(stmt, 1, time_t_timestamp);
         sqlite3_bind_text(stmt, 2, network.ssid.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 3, network.bssid.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 4, network.signal_dbm);
@@ -310,10 +348,11 @@ public:
     void calculateSignalHeatmap() {
         signal_grid.clear();
         
-        // Get data from last 30 days
-        std::time_t cutoff_time = std::time(nullptr) - (ROLLING_PERIOD_DAYS * 24 * 60 * 60);
+        // Issue 22: Replace time with std::chrono
+        auto cutoff_time = std::chrono::system_clock::now() - std::chrono::hours(ROLLING_PERIOD_DAYS * 24);
+        auto cutoff_time_t = std::chrono::system_clock::to_time_t(cutoff_time);
         
-        const char* query = R"(
+        constexpr const char* query = R"(
             SELECT grid_x, grid_y, AVG(signal_dbm) as avg_signal, COUNT(*) as count
             FROM wifi_scans
             WHERE timestamp > ?
@@ -322,7 +361,7 @@ public:
         
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db, query, -1, &stmt, nullptr);
-        sqlite3_bind_int64(stmt, 1, cutoff_time);
+        sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             int x = sqlite3_column_int(stmt, 0);
@@ -337,11 +376,12 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Estimate signal at unmeasured grid points
-    double estimateSignalAtPoint(int x, int y) {
+    // Issue 18: Function should be declared const
+    double estimateSignalAtPoint(int x, int y) const {
         double weighted_sum = 0.0;
         double weight_total = 0.0;
         
+        // Issue 19: Replace declaration with structured binding
         for (const auto& [coord, point] : signal_grid) {
             double distance = std::sqrt(std::pow(x - coord.first, 2) + std::pow(y - coord.second, 2));
             if (distance < 0.1) {
@@ -357,14 +397,13 @@ public:
         return weight_total > 0 ? weighted_sum / weight_total : -100.0;
     }
     
-    // Find coverage gaps
-    std::vector<std::pair<int, int>> findCoverageGaps(int min_x, int max_x, int min_y, int max_y) {
+    // Find coverage gaps - Issue 20: Reduce nesting by extracting helper function
+    std::vector<std::pair<int, int>> findCoverageGaps(int min_x, int max_x, int min_y, int max_y) const {
         std::vector<std::pair<int, int>> gaps;
         
         for (int x = min_x; x <= max_x; x += GRID_INTERVAL_METERS) {
             for (int y = min_y; y <= max_y; y += GRID_INTERVAL_METERS) {
-                double estimated_signal = estimateSignalAtPoint(x, y);
-                if (estimated_signal < SIGNAL_THRESHOLD_DBM) {
+                if (isGapLocation(x, y)) {
                     gaps.push_back({x, y});
                 }
             }
@@ -373,6 +412,14 @@ public:
         return gaps;
     }
     
+private:
+    // Helper function to reduce nesting
+    bool isGapLocation(int x, int y) const {
+        double estimated_signal = estimateSignalAtPoint(x, y);
+        return estimated_signal < SIGNAL_THRESHOLD_DBM;
+    }
+    
+public:
     // Calculate optimal router placement
     std::vector<RouterRecommendation> calculateOptimalRouterPlacement(int min_x, int max_x, int min_y, int max_y) {
         std::vector<RouterRecommendation> recommendations;
@@ -381,6 +428,7 @@ public:
         // Evaluate each potential position
         for (int x = min_x; x <= max_x; x += GRID_INTERVAL_METERS) {
             for (int y = min_y; y <= max_y; y += GRID_INTERVAL_METERS) {
+                // Issue 25-26: Define each identifier in dedicated statement
                 double coverage_score = 0.0;
                 double gap_reduction_score = 0.0;
                 
@@ -404,8 +452,8 @@ public:
             }
         }
         
-        // Sort by combined score
-        std::sort(recommendations.begin(), recommendations.end(), 
+        // Issue 21: Use std::ranges::sort
+        std::ranges::sort(recommendations, 
             [](const RouterRecommendation& a, const RouterRecommendation& b) {
                 return (a.gap_reduction_score + a.coverage_score) > (b.gap_reduction_score + b.coverage_score);
             });
@@ -419,13 +467,15 @@ public:
     }
     
     // Generate historical trend analysis
-    void generateTrendAnalysis() {
+    void generateTrendAnalysis() const {
         std::cout << "\n=== Historical Trend Analysis (Last 30 Days) ===" << std::endl;
         
-        std::time_t cutoff_time = std::time(nullptr) - (ROLLING_PERIOD_DAYS * 24 * 60 * 60);
+        // Issue 27: Replace time with std::chrono
+        auto cutoff_time = std::chrono::system_clock::now() - std::chrono::hours(ROLLING_PERIOD_DAYS * 24);
+        auto cutoff_time_t = std::chrono::system_clock::to_time_t(cutoff_time);
         
         // Average signal strength trend
-        const char* trend_query = R"(
+        constexpr const char* trend_query = R"(
             SELECT 
                 DATE(timestamp, 'unixepoch') as date,
                 AVG(signal_dbm) as avg_signal,
@@ -441,7 +491,7 @@ public:
         
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db, trend_query, -1, &stmt, nullptr);
-        sqlite3_bind_int64(stmt, 1, cutoff_time);
+        sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         
         std::cout << "\nDaily Signal Strength Summary:" << std::endl;
         std::cout << "Date       | Avg Signal | Min Signal | Max Signal | Measurements" << std::endl;
@@ -449,10 +499,11 @@ public:
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const char* date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            double avg_signal = sqlite3_column_double(stmt, 1);
-            int min_signal = sqlite3_column_int(stmt, 2);
-            int max_signal = sqlite3_column_int(stmt, 3);
-            int count = sqlite3_column_int(stmt, 4);
+            // Issue 23-24: Replace redundant type with auto
+            auto avg_signal = sqlite3_column_double(stmt, 1);
+            auto min_signal = sqlite3_column_int(stmt, 2);
+            auto max_signal = sqlite3_column_int(stmt, 3);
+            auto count = sqlite3_column_int(stmt, 4);
             
             std::cout << std::setw(10) << date << " | "
                       << std::setw(10) << std::fixed << std::setprecision(1) << avg_signal << " | "
@@ -464,7 +515,7 @@ public:
         sqlite3_finalize(stmt);
         
         // Network-specific analysis
-        const char* network_query = R"(
+        constexpr const char* network_query = R"(
             SELECT 
                 ssid,
                 AVG(signal_dbm) as avg_signal,
@@ -477,7 +528,7 @@ public:
         )";
         
         sqlite3_prepare_v2(db, network_query, -1, &stmt, nullptr);
-        sqlite3_bind_int64(stmt, 1, cutoff_time);
+        sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         
         std::cout << "\nNetwork Performance Summary:" << std::endl;
         std::cout << "SSID                          | Avg Signal | Measurements | Days Seen" << std::endl;
@@ -485,9 +536,9 @@ public:
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const char* ssid = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            double avg_signal = sqlite3_column_double(stmt, 1);
-            int measurements = sqlite3_column_int(stmt, 2);
-            int days_seen = sqlite3_column_int(stmt, 3);
+            auto avg_signal = sqlite3_column_double(stmt, 1);
+            auto measurements = sqlite3_column_int(stmt, 2);
+            auto days_seen = sqlite3_column_int(stmt, 3);
             
             std::cout << std::left << std::setw(29) << ssid << " | "
                       << std::right << std::setw(10) << std::fixed << std::setprecision(1) << avg_signal << " | "
@@ -505,8 +556,10 @@ public:
         calculateSignalHeatmap();
         
         // Define area of interest (adjust based on your facility)
-        int min_x = -100, max_x = 100;
-        int min_y = -100, max_y = 100;
+        constexpr int min_x = -100;
+        constexpr int max_x = 100;
+        constexpr int min_y = -100;
+        constexpr int max_y = 100;
         
         // Find coverage gaps
         auto gaps = findCoverageGaps(min_x, max_x, min_y, max_y);
@@ -535,7 +588,7 @@ public:
         }
         
         // Store recommendations
-        const char* insert_rec = R"(
+        constexpr const char* insert_rec = R"(
             INSERT INTO router_recommendations (timestamp, grid_x, grid_y, coverage_score, gap_reduction_score)
             VALUES (?, ?, ?, ?, ?);
         )";
@@ -543,9 +596,12 @@ public:
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db, insert_rec, -1, &stmt, nullptr);
         
-        std::time_t now = std::time(nullptr);
+        // Issue 29: Replace time with std::chrono
+        auto now = std::chrono::system_clock::now();
+        auto now_time_t = std::chrono::system_clock::to_time_t(now);
+        
         for (const auto& rec : recommendations) {
-            sqlite3_bind_int64(stmt, 1, now);
+            sqlite3_bind_int64(stmt, 1, now_time_t);
             sqlite3_bind_int(stmt, 2, rec.x);
             sqlite3_bind_int(stmt, 3, rec.y);
             sqlite3_bind_double(stmt, 4, rec.coverage_score);
@@ -558,17 +614,18 @@ public:
         sqlite3_finalize(stmt);
         
         // Recent alerts summary
-        const char* alerts_query = R"(
+        constexpr const char* alerts_query = R"(
             SELECT COUNT(*) as alert_count
             FROM signal_alerts
             WHERE timestamp > ?;
         )";
         
         sqlite3_prepare_v2(db, alerts_query, -1, &stmt, nullptr);
-        sqlite3_bind_int64(stmt, 1, now - (24 * 60 * 60)); // Last 24 hours
+        auto yesterday = now_time_t - (24 * 60 * 60);
+        sqlite3_bind_int64(stmt, 1, yesterday);
         
         if (sqlite3_step(stmt) == SQLITE_ROW) {
-            int alert_count = sqlite3_column_int(stmt, 0);
+            auto alert_count = sqlite3_column_int(stmt, 0);
             std::cout << "\nSignal Alerts (Last 24 hours): " << alert_count << std::endl;
             
             if (alert_count > 10) {
@@ -590,11 +647,17 @@ public:
         while (signal_manager->shouldContinue()) {
             auto start_time = std::chrono::steady_clock::now();
             
-            // Perform WiFi scan
-            std::cout << "\n[" << std::time(nullptr) << "] Performing WiFi scan #" << ++scan_count << std::endl;
-            auto networks = scanWiFiNetworks();
+            // Issue 28: Extract assignment from expression
+            ++scan_count;
             
-            if (!networks.empty()) {
+            // Issue 29: Replace time with std::chrono
+            auto current_time = std::chrono::system_clock::now();
+            auto current_time_t = std::chrono::system_clock::to_time_t(current_time);
+            
+            std::cout << "\n[" << current_time_t << "] Performing WiFi scan #" << scan_count << std::endl;
+            
+            // Issue 30: Use init-statement in if
+            if (auto networks = scanWiFiNetworks(); !networks.empty()) {
                 std::cout << "Found " << networks.size() << " networks" << std::endl;
                 
                 // Store results (using grid position 0,0 as default - modify based on device location)
@@ -626,12 +689,13 @@ public:
     // Database maintenance
     void performMaintenance() {
         // Clean up old data beyond rolling period
-        std::time_t cutoff_time = std::time(nullptr) - (ROLLING_PERIOD_DAYS * 24 * 60 * 60 * 2); // Keep 60 days
+        auto cutoff_time = std::chrono::system_clock::now() - std::chrono::hours(ROLLING_PERIOD_DAYS * 24 * 2);
+        auto cutoff_time_t = std::chrono::system_clock::to_time_t(cutoff_time);
         
-        const char* cleanup_sql = "DELETE FROM wifi_scans WHERE timestamp < ?;";
+        constexpr const char* cleanup_sql = "DELETE FROM wifi_scans WHERE timestamp < ?;";
         sqlite3_stmt* stmt;
         sqlite3_prepare_v2(db, cleanup_sql, -1, &stmt, nullptr);
-        sqlite3_bind_int64(stmt, 1, cutoff_time);
+        sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
         
@@ -642,14 +706,14 @@ public:
 
 int main() {
     try {
-        // Create WiFi signal mapper instance
-        WiFiSignalMapper mapper("wifi_signal_map.db");
+        // Issue 4: Use class template argument deduction (auto for smart pointers)
+        auto mapper = std::make_unique<WiFiSignalMapper>("wifi_signal_map.db");
         
         // Start monitoring
-        mapper.startMonitoring();
+        mapper->startMonitoring();
         
         // Perform final maintenance
-        mapper.performMaintenance();
+        mapper->performMaintenance();
         
     } catch (const std::exception& e) {
         std::cerr << "Error: " << e.what() << std::endl;
