@@ -2,7 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
-#include <string_view>  // Add this include for string_view
+#include <string_view>
 #include <vector>
 #include <map>
 #include <cmath>
@@ -26,7 +26,6 @@ constexpr int SIGNAL_THRESHOLD_DBM = -70;
 constexpr int ROLLING_PERIOD_DAYS = 30;
 constexpr double SIGNAL_PROPAGATION_FACTOR = 2.0;
 
-// Issue 1: Structure with proper copy/move semantics
 struct WiFiNetwork {
     std::string ssid;
     std::string bssid;
@@ -35,7 +34,6 @@ struct WiFiNetwork {
     double frequency;
     std::chrono::system_clock::time_point timestamp;
     
-    // Default copy/move operations are fine for this struct
     WiFiNetwork() = default;
     WiFiNetwork(const WiFiNetwork&) = default;
     WiFiNetwork& operator=(const WiFiNetwork&) = default;
@@ -44,14 +42,12 @@ struct WiFiNetwork {
     ~WiFiNetwork() = default;
 };
 
-// Issue 1: Structure with proper copy/move semantics
 struct GridPoint {
     int x;
     int y;
     double avg_signal;
     int measurement_count;
     
-    // Default copy/move operations are fine for this struct
     GridPoint() = default;
     GridPoint(const GridPoint&) = default;
     GridPoint& operator=(const GridPoint&) = default;
@@ -60,14 +56,12 @@ struct GridPoint {
     ~GridPoint() = default;
 };
 
-// Issue 1: Structure with proper copy/move semantics
 struct RouterRecommendation {
     int x;
     int y;
     double coverage_score;
     double gap_reduction_score;
     
-    // Default copy/move operations are fine for this struct
     RouterRecommendation() = default;
     RouterRecommendation(const RouterRecommendation&) = default;
     RouterRecommendation& operator=(const RouterRecommendation&) = default;
@@ -76,7 +70,6 @@ struct RouterRecommendation {
     ~RouterRecommendation() = default;
 };
 
-// Signal management class to handle graceful shutdown
 class SignalManager {
 private:
     static std::atomic<bool> should_continue;
@@ -90,7 +83,6 @@ public:
         signal(SIGTERM, SignalManager::signalHandler);
     }
 
-    // Copy/move operations for singleton
     SignalManager(const SignalManager&) = delete;
     SignalManager& operator=(const SignalManager&) = delete;
     
@@ -127,7 +119,6 @@ public:
     }
 };
 
-// Static member definitions
 std::atomic<bool> SignalManager::should_continue{true};
 SignalManager* SignalManager::instance = nullptr;
 
@@ -138,8 +129,6 @@ private:
     std::map<std::pair<int, int>, GridPoint> signal_grid;
     std::unique_ptr<SignalManager> signal_manager;
     
-    // Helper function to process network line - Issue 7: Reduce nesting
-    // Issue 3: Replace const reference to std::string by std::string_view
     void processNetworkLine(std::string_view line, WiFiNetwork& current_network, bool& in_cell, std::vector<WiFiNetwork>& networks) const {
         if (line.contains("Cell")) {
             if (in_cell && !current_network.bssid.empty()) {
@@ -163,14 +152,12 @@ private:
         }
     }
     
-    // Issue 4: Replace const reference to std::string by std::string_view
     void extractBSSID(std::string_view line, WiFiNetwork& network) const {
         if (auto pos = line.find("Address: "); pos != std::string::npos) {
             network.bssid = line.substr(pos + 9, 17);
         }
     }
     
-    // Issue 5: Replace const reference to std::string by std::string_view
     void extractSSID(std::string_view line, WiFiNetwork& network) const {
         auto start = line.find("\"") + 1;
         auto end = line.rfind("\"");
@@ -179,7 +166,6 @@ private:
         }
     }
     
-    // Issue 6: Replace const reference to std::string by std::string_view
     void extractSignalStrength(std::string_view line, WiFiNetwork& network) const {
         auto pos = line.find("Signal level=");
         std::string signal_str{line.substr(pos + 13)};
@@ -203,13 +189,11 @@ private:
         return estimated_signal < SIGNAL_THRESHOLD_DBM;
     }
     
-    // Issue 2: Helper function to reduce nesting in calculateOptimalRouterPlacement
     double calculateGapReductionScore(int x, int y, const std::vector<std::pair<int, int>>& gaps) const {
         auto gap_reduction_score = 0.0;
         
         for (const auto& [gap_x, gap_y] : gaps) {
             auto distance = std::sqrt(std::pow(x - gap_x, 2) + std::pow(y - gap_y, 2));
-            // Assume router provides -40 dBm at 1 meter
             auto signal_at_gap = -40.0 - 20.0 * SIGNAL_PROPAGATION_FACTOR * std::log10(std::max(1.0, distance));
             
             if (signal_at_gap > SIGNAL_THRESHOLD_DBM) {
@@ -223,16 +207,13 @@ private:
 public:
     explicit WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
         : db_path(database_path) {
-        // Issue 2: Use class template argument deduction
         signal_manager = std::make_unique<SignalManager>();
         initializeDatabase();
     }
     
-    // Delete copy constructor and assignment operator for resource safety
     WiFiSignalMapper(const WiFiSignalMapper&) = delete;
     WiFiSignalMapper& operator=(const WiFiSignalMapper&) = delete;
     
-    // Move constructor and assignment
     WiFiSignalMapper(WiFiSignalMapper&& other) noexcept 
         : db(other.db), db_path(std::move(other.db_path)), 
           signal_grid(std::move(other.signal_grid)),
@@ -260,15 +241,12 @@ public:
         }
     }
     
-    // Initialize SQLite database
     void initializeDatabase() {
-        // Issue 4: Use init-statement to declare "rc" inside the if statement
         if (auto rc = sqlite3_open(db_path.c_str(), &db); rc) {
             std::cerr << "Can't open database: " << sqlite3_errmsg(db) << std::endl;
             exit(1);
         }
         
-        // Create tables if they don't exist
         constexpr const char* create_scans_table = R"(
             CREATE TABLE IF NOT EXISTS wifi_scans (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -324,16 +302,13 @@ public:
             sqlite3_free(err_msg);
         }
         
-        // Create indexes for better performance
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_timestamp ON wifi_scans(timestamp);", nullptr, nullptr, nullptr);
         sqlite3_exec(db, "CREATE INDEX IF NOT EXISTS idx_grid ON wifi_scans(grid_x, grid_y);", nullptr, nullptr, nullptr);
     }
     
-    // Issue 7: Reduced nesting by extracting helper function
     std::vector<WiFiNetwork> scanWiFiNetworks() const {
         std::vector<WiFiNetwork> networks;
         
-        // Execute iwlist command
         FILE* pipe = popen("sudo iwlist wlan0 scan 2>/dev/null", "r");
         if (!pipe) {
             std::cerr << "Failed to execute iwlist command" << std::endl;
@@ -350,7 +325,6 @@ public:
             processNetworkLine(line, current_network, in_cell, networks);
         }
         
-        // Add last network
         if (in_cell && !current_network.bssid.empty()) {
             current_network.timestamp = std::chrono::system_clock::now();
             networks.push_back(current_network);
@@ -360,7 +334,6 @@ public:
         return networks;
     }
     
-    // Store scan results in database
     void storeScanResults(const std::vector<WiFiNetwork>& networks, int grid_x = 0, int grid_y = 0) {
         constexpr const char* insert_sql = R"(
             INSERT INTO wifi_scans (timestamp, ssid, bssid, signal_dbm, channel, frequency, grid_x, grid_y)
@@ -371,7 +344,6 @@ public:
         sqlite3_prepare_v2(db, insert_sql, -1, &stmt, nullptr);
         
         for (const auto& network : networks) {
-            // Convert chrono time_point to time_t for SQLite
             auto time_t_timestamp = std::chrono::system_clock::to_time_t(network.timestamp);
             sqlite3_bind_int64(stmt, 1, time_t_timestamp);
             sqlite3_bind_text(stmt, 2, network.ssid.c_str(), -1, SQLITE_STATIC);
@@ -385,7 +357,6 @@ public:
             sqlite3_step(stmt);
             sqlite3_reset(stmt);
             
-            // Check for signal threshold alerts
             if (network.signal_dbm < SIGNAL_THRESHOLD_DBM) {
                 generateAlert(network, "LOW_SIGNAL");
             }
@@ -394,7 +365,6 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Issue 1: Generate alert for low signal - should be const
     void generateAlert(const WiFiNetwork& network, std::string_view alert_type) const {
         std::cout << "\n[ALERT] " << alert_type << " - " 
                   << "SSID: " << network.ssid 
@@ -421,7 +391,6 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Calculate signal coverage heatmap
     void calculateSignalHeatmap() {
         signal_grid.clear();
         
@@ -440,7 +409,6 @@ public:
         sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            // Issue 7: Replace redundant type with auto
             auto x = sqlite3_column_int(stmt, 0);
             auto y = sqlite3_column_int(stmt, 1);
             auto avg_signal = sqlite3_column_double(stmt, 2);
@@ -457,14 +425,12 @@ public:
         auto weighted_sum = 0.0;
         auto weight_total = 0.0;
         
-        // Issue 6: Replace declaration with structured binding
         for (const auto& [coord, point] : signal_grid) {
             auto distance = std::sqrt(std::pow(x - coord.first, 2) + std::pow(y - coord.second, 2));
             if (distance < 0.1) {
                 return point.avg_signal;
             }
             
-            // Path loss model: signal decreases with distance
             auto weight = 1.0 / std::pow(distance, SIGNAL_PROPAGATION_FACTOR);
             weighted_sum += point.avg_signal * weight;
             weight_total += weight;
@@ -473,7 +439,6 @@ public:
         return weight_total > 0 ? weighted_sum / weight_total : -100.0;
     }
     
-    // Find coverage gaps
     std::vector<std::pair<int, int>> findCoverageGaps(int min_x, int max_x, int min_y, int max_y) const {
         std::vector<std::pair<int, int>> gaps;
         
@@ -488,19 +453,15 @@ public:
         return gaps;
     }
     
-    // Issue 1: Calculate optimal router placement - should be const
     std::vector<RouterRecommendation> calculateOptimalRouterPlacement(int min_x, int max_x, int min_y, int max_y) const {
         std::vector<RouterRecommendation> recommendations;
         auto gaps = findCoverageGaps(min_x, max_x, min_y, max_y);
         
-        // Issue 2: Reduced nesting by extracting helper function
-        // Evaluate each potential position
         for (int x = min_x; x <= max_x; x += GRID_INTERVAL_METERS) {
             for (int y = min_y; y <= max_y; y += GRID_INTERVAL_METERS) {
                 auto coverage_score = 0.0;
                 auto gap_reduction_score = calculateGapReductionScore(x, y, gaps);
                 
-                // Calculate overlap with existing coverage
                 auto existing_signal = estimateSignalAtPoint(x, y);
                 coverage_score = 100.0 - std::abs(existing_signal);
                 
@@ -513,7 +474,6 @@ public:
                 return (a.gap_reduction_score + a.coverage_score) > (b.gap_reduction_score + b.coverage_score);
             });
         
-        // Return top 5 recommendations
         if (recommendations.size() > 5) {
             recommendations.resize(5);
         }
@@ -521,14 +481,12 @@ public:
         return recommendations;
     }
     
-    // Generate historical trend analysis
     void generateTrendAnalysis() const {
         std::cout << "\n=== Historical Trend Analysis (Last 30 Days) ===" << std::endl;
         
         auto cutoff_time = std::chrono::system_clock::now() - std::chrono::hours(ROLLING_PERIOD_DAYS * 24);
         auto cutoff_time_t = std::chrono::system_clock::to_time_t(cutoff_time);
         
-        // Average signal strength trend
         constexpr const char* trend_query = R"(
             SELECT 
                 DATE(timestamp, 'unixepoch') as date,
@@ -567,7 +525,6 @@ public:
         
         sqlite3_finalize(stmt);
         
-        // Network-specific analysis
         constexpr const char* network_query = R"(
             SELECT 
                 ssid,
@@ -602,19 +559,16 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Generate actionable insights
     void generateInsights() {
         std::cout << "\n=== Actionable Infrastructure Insights ===" << std::endl;
         
         calculateSignalHeatmap();
         
-        // Define area of interest (adjust based on your facility)
         constexpr int min_x = -100;
         constexpr int max_x = 100;
         constexpr int min_y = -100;
         constexpr int max_y = 100;
         
-        // Find coverage gaps
         auto gaps = findCoverageGaps(min_x, max_x, min_y, max_y);
         std::cout << "\nCoverage Gaps Detected: " << gaps.size() << std::endl;
         
@@ -625,7 +579,6 @@ public:
             }
         }
         
-        // Get router placement recommendations
         auto recommendations = calculateOptimalRouterPlacement(min_x, max_x, min_y, max_y);
         
         std::cout << "\nOptimal Router Placement Recommendations:" << std::endl;
@@ -640,7 +593,6 @@ public:
                       << std::setw(14) << std::fixed << std::setprecision(1) << combined_score << std::endl;
         }
         
-        // Store recommendations
         constexpr const char* insert_rec = R"(
             INSERT INTO router_recommendations (timestamp, grid_x, grid_y, coverage_score, gap_reduction_score)
             VALUES (?, ?, ?, ?, ?);
@@ -665,7 +617,6 @@ public:
         
         sqlite3_finalize(stmt);
         
-        // Recent alerts summary
         constexpr const char* alerts_query = R"(
             SELECT COUNT(*) as alert_count
             FROM signal_alerts
@@ -688,7 +639,6 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Main monitoring loop
     void startMonitoring() {
         std::cout << "WiFi Signal Mapping System Started" << std::endl;
         std::cout << "Scanning every " << SCAN_INTERVAL_SECONDS << " seconds..." << std::endl;
@@ -709,10 +659,8 @@ public:
             if (auto networks = scanWiFiNetworks(); !networks.empty()) {
                 std::cout << "Found " << networks.size() << " networks" << std::endl;
                 
-                // Store results (using grid position 0,0 as default - modify based on device location)
                 storeScanResults(networks, 0, 0);
                 
-                // Every 10 scans, generate insights
                 if (scan_count % 10 == 0) {
                     generateTrendAnalysis();
                     generateInsights();
@@ -721,12 +669,10 @@ public:
                 std::cout << "No networks found or scan failed" << std::endl;
             }
             
-            // Calculate time to next scan
             auto end_time = std::chrono::steady_clock::now();
             auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(end_time - start_time).count();
             auto sleep_time = std::max(1, SCAN_INTERVAL_SECONDS - static_cast<int>(elapsed));
             
-            // Sleep until next scan
             for (int i = 0; i < sleep_time && signal_manager->shouldContinue(); ++i) {
                 std::this_thread::sleep_for(std::chrono::seconds(1));
             }
@@ -735,9 +681,7 @@ public:
         std::cout << "\nMonitoring stopped. Total scans: " << scan_count << std::endl;
     }
     
-    // Database maintenance
     void performMaintenance() {
-        // Clean up old data beyond rolling period
         auto cutoff_time = std::chrono::system_clock::now() - std::chrono::hours(ROLLING_PERIOD_DAYS * 24 * 2);
         auto cutoff_time_t = std::chrono::system_clock::to_time_t(cutoff_time);
         
@@ -748,20 +692,16 @@ public:
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
         
-        // Vacuum database
         sqlite3_exec(db, "VACUUM;", nullptr, nullptr, nullptr);
     }
 };
 
 int main() {
     try {
-        // Issue 2: Use class template argument deduction
         auto mapper = std::make_unique<WiFiSignalMapper>("wifi_signal_map.db");
         
-        // Start monitoring
         mapper->startMonitoring();
         
-        // Perform final maintenance
         mapper->performMaintenance();
         
     } catch (const std::exception& e) {
