@@ -2,6 +2,7 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <string_view>  // Add this include for string_view
 #include <vector>
 #include <map>
 #include <cmath>
@@ -138,7 +139,8 @@ private:
     std::unique_ptr<SignalManager> signal_manager;
     
     // Helper function to process network line - Issue 7: Reduce nesting
-    void processNetworkLine(const std::string& line, WiFiNetwork& current_network, bool& in_cell, std::vector<WiFiNetwork>& networks) const {
+    // Issue 3: Replace const reference to std::string by std::string_view
+    void processNetworkLine(std::string_view line, WiFiNetwork& current_network, bool& in_cell, std::vector<WiFiNetwork>& networks) const {
         if (line.contains("Cell")) {
             if (in_cell && !current_network.bssid.empty()) {
                 current_network.timestamp = std::chrono::system_clock::now();
@@ -161,13 +163,15 @@ private:
         }
     }
     
-    void extractBSSID(const std::string& line, WiFiNetwork& network) const {
+    // Issue 4: Replace const reference to std::string by std::string_view
+    void extractBSSID(std::string_view line, WiFiNetwork& network) const {
         if (auto pos = line.find("Address: "); pos != std::string::npos) {
             network.bssid = line.substr(pos + 9, 17);
         }
     }
     
-    void extractSSID(const std::string& line, WiFiNetwork& network) const {
+    // Issue 5: Replace const reference to std::string by std::string_view
+    void extractSSID(std::string_view line, WiFiNetwork& network) const {
         auto start = line.find("\"") + 1;
         auto end = line.rfind("\"");
         if (start < end) {
@@ -175,20 +179,22 @@ private:
         }
     }
     
-    void extractSignalStrength(const std::string& line, WiFiNetwork& network) const {
+    // Issue 6: Replace const reference to std::string by std::string_view
+    void extractSignalStrength(std::string_view line, WiFiNetwork& network) const {
         auto pos = line.find("Signal level=");
-        std::string signal_str = line.substr(pos + 13);
+        std::string signal_str{line.substr(pos + 13)};
         network.signal_dbm = std::stoi(signal_str);
     }
     
-    void extractChannel(const std::string& line, WiFiNetwork& network) const {
+    void extractChannel(std::string_view line, WiFiNetwork& network) const {
         auto pos = line.find("Channel:");
-        network.channel = std::stoi(line.substr(pos + 8));
+        std::string channel_str{line.substr(pos + 8)};
+        network.channel = std::stoi(channel_str);
     }
     
-    void extractFrequency(const std::string& line, WiFiNetwork& network) const {
+    void extractFrequency(std::string_view line, WiFiNetwork& network) const {
         auto pos = line.find("Frequency:");
-        std::string freq_str = line.substr(pos + 10);
+        std::string freq_str{line.substr(pos + 10)};
         network.frequency = std::stod(freq_str);
     }
     
@@ -217,7 +223,7 @@ private:
 public:
     explicit WiFiSignalMapper(const std::string& database_path = "wifi_signal_map.db") 
         : db_path(database_path) {
-        // Issue 3: Use class template argument deduction
+        // Issue 2: Use class template argument deduction
         signal_manager = std::make_unique<SignalManager>();
         initializeDatabase();
     }
@@ -388,8 +394,8 @@ public:
         sqlite3_finalize(stmt);
     }
     
-    // Issue 2 & 5: Generate alert for low signal - should be const
-    void generateAlert(const WiFiNetwork& network, const std::string& alert_type) const {
+    // Issue 1: Generate alert for low signal - should be const
+    void generateAlert(const WiFiNetwork& network, std::string_view alert_type) const {
         std::cout << "\n[ALERT] " << alert_type << " - " 
                   << "SSID: " << network.ssid 
                   << ", Signal: " << network.signal_dbm << " dBm" 
@@ -408,7 +414,8 @@ public:
         sqlite3_bind_text(stmt, 2, network.ssid.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_text(stmt, 3, network.bssid.c_str(), -1, SQLITE_STATIC);
         sqlite3_bind_int(stmt, 4, network.signal_dbm);
-        sqlite3_bind_text(stmt, 5, alert_type.c_str(), -1, SQLITE_STATIC);
+        std::string alert_type_str{alert_type};
+        sqlite3_bind_text(stmt, 5, alert_type_str.c_str(), -1, SQLITE_STATIC);
         
         sqlite3_step(stmt);
         sqlite3_finalize(stmt);
@@ -433,7 +440,7 @@ public:
         sqlite3_bind_int64(stmt, 1, cutoff_time_t);
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            // Issue 8: Replace redundant type with auto
+            // Issue 7: Replace redundant type with auto
             auto x = sqlite3_column_int(stmt, 0);
             auto y = sqlite3_column_int(stmt, 1);
             auto avg_signal = sqlite3_column_double(stmt, 2);
@@ -546,7 +553,6 @@ public:
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
             const char* date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-            // Issue 3 & 4: Replace redundant type with auto
             auto avg_signal = sqlite3_column_double(stmt, 1);
             auto min_signal = sqlite3_column_int(stmt, 2);
             auto max_signal = sqlite3_column_int(stmt, 3);
@@ -749,6 +755,7 @@ public:
 
 int main() {
     try {
+        // Issue 2: Use class template argument deduction
         auto mapper = std::make_unique<WiFiSignalMapper>("wifi_signal_map.db");
         
         // Start monitoring
