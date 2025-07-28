@@ -114,7 +114,7 @@ public:
         return should_continue.load();
     }
 
-    void requestShutdown() {
+    void requestShutdown() const {
         should_continue.store(false);
     }
 };
