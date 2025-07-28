@@ -545,7 +545,7 @@ public:
         std::cout << "------------------------------|------------|--------------|----------" << std::endl;
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* ssid = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            auto ssid = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
             auto avg_signal = sqlite3_column_double(stmt, 1);
             auto measurements = sqlite3_column_int(stmt, 2);
             auto days_seen = sqlite3_column_int(stmt, 3);
