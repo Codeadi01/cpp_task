@@ -119,7 +119,7 @@ public:
     }
 };
 
-std::atomic<bool> SignalManager::should_continue{true};
+std::atomic SignalManager::should_continue{true};
 SignalManager* SignalManager::instance = nullptr;
 
 class WiFiSignalMapper {
