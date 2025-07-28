@@ -510,7 +510,7 @@ public:
         std::cout << "-----------|------------|------------|------------|-------------" << std::endl;
         
         while (sqlite3_step(stmt) == SQLITE_ROW) {
-            const char* date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
+            auto date = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
             auto avg_signal = sqlite3_column_double(stmt, 1);
             auto min_signal = sqlite3_column_int(stmt, 2);
             auto max_signal = sqlite3_column_int(stmt, 3);
